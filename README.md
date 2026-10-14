@@ -10,7 +10,11 @@ Automated Project Bootstrapping & Process Management for the Student Attendance 
 
 ## Walkthrough Video
 
-- **Video Link**: [Watch Walkthrough Video](https://alueducation.instructure.com/) *(Replace with your unlisted YouTube, Loom, or Google Drive link)*
+> [!IMPORTANT]
+> **Video Demonstration Link**:  
+> **[Watch the Run-Through Video Presentation](YOUR_VIDEO_LINK_HERE)**  
+>  
+> *(To finalize before grading: upload your recording to YouTube as Unlisted, Loom, or Google Drive with 'Anyone with the link can view' permission, replace `YOUR_VIDEO_LINK_HERE` above, then commit and push).*
 
 ---
 
@@ -149,80 +153,78 @@ The archival workflow (`archive_logs`):
 
 ---
 
-## Signal Trapping & Process Management (Ctrl+C / Ctrl+Z)
+## Signal Trapping & Process Management (Ctrl+C / Ctrl+Z & Error Cleanup)
 
-### How the Signal Trap Works
-During Feature 1 deployment, an unexpected interruption (e.g. accidental `Ctrl+C` / `SIGINT` or `Ctrl+Z` / `SIGTSTP`) could leave half-copied files or corrupted directories in the workspace.
+### How the Signal Trap & Cleanup Work
+During Feature 1 deployment, an unexpected interruption (e.g. accidental `Ctrl+C` / `SIGINT` or `Ctrl+Z` / `SIGTSTP`), a closed input stream, or a system permission denial could leave half-copied files or corrupted directories in the workspace.
 
-`deploy_agent.sh` handles this using POSIX signal traps:
-```bash
-cleanup_on_interrupt() {
-    echo "[!] INTERRUPT DETECTED: Deployment process was aborted by user signal."
-    if [ "$DEPLOY_ACTIVE" -eq 1 ] && [ -n "$CURRENT_PROJECT_DIR" ] && [ -d "$CURRENT_PROJECT_DIR" ]; then
-        ARCHIVE_FILE="${CURRENT_PROJECT_DIR}_archive.zip"
-        echo "[*] Archiving incomplete project state to '$ARCHIVE_FILE'..."
-        zip -rq "$ARCHIVE_FILE" "$CURRENT_PROJECT_DIR"
-        echo "[*] Deleting incomplete directory '$CURRENT_PROJECT_DIR' to prevent workspace clutter..."
-        rm -rf "$CURRENT_PROJECT_DIR"
-        echo "[+] Cleanup completed successfully."
-    fi
-    exit 130
-}
-trap cleanup_on_interrupt SIGINT SIGTSTP
-```
+`deploy_agent.sh` provides bulletproof process management through two complementary mechanisms:
 
-- When triggered, `cleanup_on_interrupt` checks if deployment was actively scaffolding a directory.
-- It bundles whatever has been created so far into `attendance_tracker_{input}_archive.zip`.
-- It completely deletes the incomplete directory (`rm -rf "$CURRENT_PROJECT_DIR"`).
-- It exits cleanly with return code `130` (standard SIGINT exit code in Unix).
-- Once deployment finishes, the trap is disarmed (`trap - SIGINT SIGTSTP`) before launching Python, allowing standard terminal interrupt behavior during the marking session.
+1. **Signal Trap (`cleanup_on_interrupt`)**:
+   Traps POSIX signals `SIGINT` and `SIGTSTP` during active project scaffolding:
+   ```bash
+   cleanup_on_interrupt() {
+       echo "[!] INTERRUPT DETECTED: Deployment process was aborted by user signal."
+       if [ "$DEPLOY_ACTIVE" -eq 1 ] && [ -n "$CURRENT_PROJECT_DIR" ] && [ -d "$CURRENT_PROJECT_DIR" ]; then
+           local archive_file="${CURRENT_PROJECT_DIR}_archive.zip"
+           echo "[*] Archiving incomplete project state to '$archive_file'..."
+           zip -rq "$archive_file" "$CURRENT_PROJECT_DIR"
+           echo "[*] Deleting incomplete directory '$CURRENT_PROJECT_DIR' to prevent workspace clutter..."
+           rm -rf "$CURRENT_PROJECT_DIR"
+           echo "[+] Cleanup completed successfully."
+       fi
+       DEPLOY_ACTIVE=0
+       trap - SIGINT SIGTSTP
+       exit 130
+   }
+   trap cleanup_on_interrupt SIGINT SIGTSTP
+   ```
 
-### Testing the Interruption Path
+2. **Atomic Failure Cleanup (`fail_deploy`)**:
+   If an operation encounters a permission denial, an unreadable template, or an unexpected end of input, `fail_deploy` guarantees the exact same clean state: it bundles the partial state into a recovery `.zip`, deletes the incomplete folder, disarms the trap, and exits gracefully with an error message instead of leaving half-made directories behind.
 
-You can demonstrate the signal trap in two ways:
+### Testing the Interruption Path (Interactive Demo)
 
-#### Method 1: Interactive Keypress
+To demonstrate the signal trap in your walkthrough video:
 1. Run `./deploy_agent.sh deploy`.
-2. Enter a project name (e.g. `interrupt_test`).
-3. When prompted to select `[A/B]` for the roster or to enter student count, press **`Ctrl + C`**.
-4. Observe the terminal output:
-   - Interrupt message displayed.
-   - `attendance_tracker_interrupt_test_archive.zip` created.
-   - `attendance_tracker_interrupt_test/` removed.
-
-#### Method 2: Command-Line Simulation
-Run this one-liner in bash:
-```bash
-./deploy_agent.sh deploy << "EOF" &
-interrupt_demo
-EOF
-PID=$!
-sleep 0.5
-kill -INT $PID
-wait $PID
-```
-Check workspace contents:
-```bash
-ls -la attendance_tracker_interrupt_demo*
-```
-You will find only `attendance_tracker_interrupt_demo_archive.zip`.
+2. Enter a project name (e.g. `interrupt_demo`).
+3. The script initializes the directory structure and templates, then pauses at the prompt:
+   ```text
+   Choose roster generation method:
+     [A] Copy from sample template (pre-populated with 4 historical sessions)
+     [B] Generate a fresh roster from scratch (starts at 0 sessions)
+   Select option [A/B]:
+   ```
+4. Press **`Ctrl + C`**.
+5. Observe the clean terminal recovery:
+   ```text
+   ======================================================================
+   [!] INTERRUPT DETECTED: Deployment process was aborted by user signal.
+   ======================================================================
+   [*] Archiving incomplete project state to 'attendance_tracker_interrupt_demo_archive.zip'...
+   [+] Recovery archive successfully created: attendance_tracker_interrupt_demo_archive.zip
+   [*] Deleting incomplete directory 'attendance_tracker_interrupt_demo' to prevent workspace clutter...
+   [+] Cleanup completed successfully.
+   [*] Exiting cleanly.
+   ```
+6. Verify with `ls -la attendance_tracker_interrupt_demo*`:
+   - `attendance_tracker_interrupt_demo/` has been completely deleted.
+   - `attendance_tracker_interrupt_demo_archive.zip` exists and contains the recovery files.
 
 ### Recovery Archive Contents
-The recovery `.zip` file contains the snapshot of the incomplete directory at the moment of interruption:
+Inspect the created recovery archive with `unzip -l`:
 ```bash
 unzip -l attendance_tracker_interrupt_demo_archive.zip
 ```
-Example output:
+Real output:
 ```text
 Archive:  attendance_tracker_interrupt_demo_archive.zip
   Length      Date    Time    Name
 ---------  ---------- -----   ----
-        0  2026-10-14 15:30   attendance_tracker_interrupt_demo/
-        0  2026-10-14 15:30   attendance_tracker_interrupt_demo/Helpers/
-     3100  2026-10-14 15:30   attendance_tracker_interrupt_demo/attendance_checker.py
-       98  2026-10-14 15:30   attendance_tracker_interrupt_demo/Helpers/config.json
+     4392  2026-10-14 15:57   attendance_tracker_interrupt_demo/attendance_checker.py
+      108  2026-10-14 15:57   attendance_tracker_interrupt_demo/Helpers/config.json
 ---------                     -------
-     3198                     4 files
+     4500                     2 files
 ```
 
 ---
@@ -303,7 +305,8 @@ Every feature and edge case was tested against the project requirements:
 | **Feature 2 Execution** | Run marking session | Terminal accepts `P`/`A` inputs, updates roster and logs | **PASS** |
 | **Feature 3 Archival** | Archive logs after session | Copies logs with timestamp into `archives/attendance/` and `archives/absent/` | **PASS** |
 | **Missing Log Handling** | Archive when `absent.log` does not exist | Logs informative message without crashing | **PASS** |
-| **Signal Trap (Ctrl+C)** | Interrupt deployment | Creates `.zip` recovery archive and removes incomplete folder | **PASS** |
+| **Signal Trap (Ctrl+C)** | Interrupt deployment via Ctrl+C / SIGINT | Creates `.zip` recovery archive and removes incomplete folder | **PASS** |
+| **Atomic Error Cleanup** | Input abort or permission failure | Bundles partial state into `.zip` and removes incomplete folder | **PASS** |
 
 ---
 
