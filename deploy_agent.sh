@@ -64,12 +64,12 @@ cleanup_on_interrupt() {
     echo "[!] INTERRUPT DETECTED: Deployment process was aborted by user signal."
     echo "======================================================================"
     if [ "$DEPLOY_ACTIVE" -eq 1 ] && [ -n "$CURRENT_PROJECT_DIR" ] && [ -d "$CURRENT_PROJECT_DIR" ]; then
-        ARCHIVE_FILE="${CURRENT_PROJECT_DIR}_archive.zip"
-        echo "[*] Archiving incomplete project state to '$ARCHIVE_FILE'..."
-        if zip -rq "$ARCHIVE_FILE" "$CURRENT_PROJECT_DIR"; then
-            echo "[+] Recovery archive successfully created: $ARCHIVE_FILE"
+        local archive_file="${CURRENT_PROJECT_DIR}_archive.zip"
+        echo "[*] Archiving incomplete project state to '$archive_file'..."
+        if zip -rq "$archive_file" "$CURRENT_PROJECT_DIR"; then
+            echo "[+] Recovery archive successfully created: $archive_file"
         else
-            echo "[!] Warning: zip utility encountered an issue creating $ARCHIVE_FILE"
+            echo "[!] Warning: zip utility encountered an issue creating $archive_file"
         fi
 
         echo "[*] Deleting incomplete directory '$CURRENT_PROJECT_DIR' to prevent workspace clutter..."
@@ -78,8 +78,34 @@ cleanup_on_interrupt() {
     else
         echo "[*] No partial deployment directory found to clean up."
     fi
+    DEPLOY_ACTIVE=0
+    trap - SIGINT SIGTSTP
     echo "[*] Exiting cleanly."
     exit 130
+}
+
+# ------------------------------------------------------------------------------
+# Deployment Failure & Atomic Error Cleanup Handler
+# ------------------------------------------------------------------------------
+fail_deploy() {
+    local error_msg="$1"
+    echo ""
+    echo "======================================================================"
+    echo "[-] DEPLOYMENT FAILURE: $error_msg"
+    echo "======================================================================"
+    if [ "$DEPLOY_ACTIVE" -eq 1 ] && [ -n "$CURRENT_PROJECT_DIR" ] && [ -d "$CURRENT_PROJECT_DIR" ]; then
+        local archive_file="${CURRENT_PROJECT_DIR}_archive.zip"
+        echo "[*] Bundling incomplete project state into '$archive_file'..."
+        if zip -rq "$archive_file" "$CURRENT_PROJECT_DIR"; then
+            echo "[+] Recovery archive created: $archive_file"
+        fi
+        echo "[*] Deleting incomplete directory '$CURRENT_PROJECT_DIR' to prevent workspace clutter..."
+        rm -rf "$CURRENT_PROJECT_DIR"
+        echo "[+] Error cleanup completed."
+    fi
+    DEPLOY_ACTIVE=0
+    trap - SIGINT SIGTSTP
+    return 1
 }
 
 # ------------------------------------------------------------------------------
@@ -195,9 +221,7 @@ deploy_application() {
 
     # Step 1: Create exact directory architecture
     if ! mkdir -p "$project_dir/Helpers" "$project_dir/reports" "$project_dir/archives/attendance" "$project_dir/archives/absent"; then
-        echo "[-] Error: Failed to create directories for '$project_dir'. Permission denied."
-        DEPLOY_ACTIVE=0
-        trap - SIGINT SIGTSTP
+        fail_deploy "Failed to create directory structure. Permission denied or storage error."
         return 1
     fi
     echo "[+] Created required directory structure:"
@@ -208,14 +232,14 @@ deploy_application() {
 
     # Step 2: Deploy attendance_checker.py unmodified
     if ! cp "$TEMPLATE_PY" "$project_dir/attendance_checker.py"; then
-        echo "[-] Error: Failed to copy attendance_checker.py."
+        fail_deploy "Failed to deploy attendance_checker.py from templates."
         return 1
     fi
     echo "[+] Deployed attendance_checker.py from templates."
 
     # Step 3: Deploy config.json template
     if ! cp "$TEMPLATE_CONFIG" "$project_dir/Helpers/config.json"; then
-        echo "[-] Error: Failed to copy config.json."
+        fail_deploy "Failed to deploy config.json from templates."
         return 1
     fi
     echo "[+] Deployed Helpers/config.json from templates."
@@ -228,7 +252,7 @@ deploy_application() {
     local roster_choice=""
     while [[ ! "$roster_choice" =~ ^[AaBb]$ ]]; do
         if ! read -r -p "Select option [A/B]: " roster_choice; then
-            echo ""
+            fail_deploy "Deployment aborted during roster choice selection."
             return 1
         fi
     done
@@ -236,11 +260,11 @@ deploy_application() {
     if [[ "$roster_choice" =~ ^[Aa]$ ]]; then
         # Option A: Copy from template
         local total_template_rows
-        total_template_rows=$(($(wc -l < "$TEMPLATE_ASSETS") - 1))
+        total_template_rows=$(tail -n +2 "$TEMPLATE_ASSETS" | grep -c .)
         local count_to_copy=0
         while true; do
             if ! read -r -p "How many students would you like to copy? (1-$total_template_rows): " count_to_copy; then
-                echo ""
+                fail_deploy "Deployment aborted during template student count selection."
                 return 1
             fi
             if is_positive_integer "$count_to_copy" && [ "$count_to_copy" -le "$total_template_rows" ]; then
@@ -249,7 +273,10 @@ deploy_application() {
             echo "[!] Please enter a valid number between 1 and $total_template_rows."
         done
 
-        head -n "$((count_to_copy + 1))" "$TEMPLATE_ASSETS" > "$project_dir/Helpers/assets.csv"
+        if ! head -n "$((count_to_copy + 1))" "$TEMPLATE_ASSETS" > "$project_dir/Helpers/assets.csv"; then
+            fail_deploy "Failed to write Helpers/assets.csv. Permission denied."
+            return 1
+        fi
         echo "[+] Successfully copied $count_to_copy student records from template to Helpers/assets.csv."
         echo "[+] Configured total_sessions remains 5 (consistent with 4 prior sessions)."
 
@@ -259,7 +286,7 @@ deploy_application() {
         local max_sample="${#SAMPLE_NAMES[@]}"
         while true; do
             if ! read -r -p "How many students would you like to generate? (1-$max_sample): " count_to_generate; then
-                echo ""
+                fail_deploy "Deployment aborted during fresh roster count selection."
                 return 1
             fi
             if is_positive_integer "$count_to_generate" && [ "$count_to_generate" -le "$max_sample" ]; then
@@ -268,14 +295,20 @@ deploy_application() {
             echo "[!] Please enter a valid number between 1 and $max_sample."
         done
 
-        echo "Email,Names,Attendance Count,Absence Count" > "$project_dir/Helpers/assets.csv"
+        if ! echo "Email,Names,Attendance Count,Absence Count" > "$project_dir/Helpers/assets.csv"; then
+            fail_deploy "Failed to initialize Helpers/assets.csv. Permission denied."
+            return 1
+        fi
         for ((i=0; i<count_to_generate; i++)); do
             echo "${SAMPLE_EMAILS[$i]},${SAMPLE_NAMES[$i]},0,0" >> "$project_dir/Helpers/assets.csv"
         done
         echo "[+] Generated fresh roster with $count_to_generate students in Helpers/assets.csv."
 
         # Keep total_sessions consistent: fresh roster means session 1
-        sed -i.bak -E 's/("total_sessions":[[:space:]]*)[0-9]+/\11/' "$project_dir/Helpers/config.json"
+        if ! sed -i.bak -E 's/("total_sessions":[[:space:]]*)[0-9]+/\11/' "$project_dir/Helpers/config.json"; then
+            fail_deploy "Failed to update total_sessions in Helpers/config.json."
+            return 1
+        fi
         rm -f "$project_dir/Helpers/config.json.bak"
         echo "[+] Updated Helpers/config.json total_sessions to 1 (consistent with fresh roster session 1)."
     fi
@@ -283,8 +316,14 @@ deploy_application() {
     # Step 5: Set and verify permissions
     echo ""
     echo "[*] Setting file permissions..."
-    chmod +x "$project_dir/attendance_checker.py"
-    chmod 600 "$project_dir/Helpers/config.json"
+    if ! chmod +x "$project_dir/attendance_checker.py"; then
+        fail_deploy "Failed to set execute permission on attendance_checker.py. Permission denied."
+        return 1
+    fi
+    if ! chmod 600 "$project_dir/Helpers/config.json"; then
+        fail_deploy "Failed to set restricted permissions on Helpers/config.json. Permission denied."
+        return 1
+    fi
     echo "[OK] Permissions applied:"
     echo "     - $project_dir/attendance_checker.py -> executable (chmod +x)"
     echo "     - $project_dir/Helpers/config.json   -> restricted read/write owner only (chmod 600)"
@@ -292,8 +331,8 @@ deploy_application() {
     # Step 6: Offer to update attendance alert thresholds
     echo ""
     if ! read -r -p "Would you like to customize attendance alert thresholds in config.json? (y/N): " update_thresholds; then
-        echo ""
-        update_thresholds="N"
+        fail_deploy "Deployment aborted during alert threshold prompt."
+        return 1
     fi
     case "$update_thresholds" in
         [yY]|[yY][eE][sS])
@@ -302,7 +341,7 @@ deploy_application() {
 
             while true; do
                 if ! read -r -p "Enter new warning threshold percentage [default 75]: " new_warning; then
-                    echo ""
+                    fail_deploy "Deployment aborted during warning threshold input."
                     return 1
                 fi
                 new_warning="${new_warning:-75}"
@@ -314,7 +353,7 @@ deploy_application() {
 
             while true; do
                 if ! read -r -p "Enter new failure threshold percentage [default 50]: " new_failure; then
-                    echo ""
+                    fail_deploy "Deployment aborted during failure threshold input."
                     return 1
                 fi
                 new_failure="${new_failure:-50}"
@@ -330,8 +369,11 @@ deploy_application() {
             done
 
             echo "[*] Updating thresholds with sed in '$project_dir/Helpers/config.json'..."
-            sed -i.bak -E "s/(\"warning\":[[:space:]]*)[0-9]+/\1$new_warning/" "$project_dir/Helpers/config.json"
-            sed -i.bak -E "s/(\"failure\":[[:space:]]*)[0-9]+/\1$new_failure/" "$project_dir/Helpers/config.json"
+            if ! sed -i.bak -E "s/(\"warning\":[[:space:]]*)[0-9]+/\1$new_warning/" "$project_dir/Helpers/config.json" || \
+               ! sed -i.bak -E "s/(\"failure\":[[:space:]]*)[0-9]+/\1$new_failure/" "$project_dir/Helpers/config.json"; then
+                fail_deploy "Failed to update alert thresholds using sed in Helpers/config.json."
+                return 1
+            fi
             rm -f "$project_dir/Helpers/config.json.bak"
             echo "[+] Updated thresholds: warning = $new_warning%, failure = $new_failure%."
             ;;
