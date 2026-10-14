@@ -1,0 +1,10 @@
+# Deployed instance directories
+attendance_tracker_*/
+
+# Recovery archives and temporary runtime logs
+*.zip
+*.log
+
+# OS-specific files
+.DS_Store
+Thumbs.db

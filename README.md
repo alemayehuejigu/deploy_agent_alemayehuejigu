@@ -12,9 +12,9 @@ Automated Project Bootstrapping & Process Management for the Student Attendance 
 
 > [!IMPORTANT]
 > **Video Demonstration Link**:  
-> **[Watch the Run-Through Video Presentation](YOUR_VIDEO_LINK_HERE)**  
->  
-> *(To finalize before grading: upload your recording to YouTube as Unlisted, Loom, or Google Drive with 'Anyone with the link can view' permission, replace `YOUR_VIDEO_LINK_HERE` above, then commit and push).*
+> **[Watch the Run-Through Video Presentation on YouTube](https://www.youtube.com/watch?v=_GViAbD5RXU)**  
+> 
+> [![Watch the Run-Through Video Presentation](https://img.youtube.com/vi/_GViAbD5RXU/hqdefault.jpg)](https://www.youtube.com/watch?v=_GViAbD5RXU)
 
 ---
 
@@ -56,6 +56,9 @@ Manual configuration and deployment of application environments are prone to hum
 deploy_agent/
 ├── deploy_agent.sh          # Master orchestration shell script
 ├── README.md                # Comprehensive documentation
+├── screenshots/             # Terminal execution & verification screenshots
+│   ├── feature1_deployment.png
+│   └── feature3_archival.png
 └── templates/               # Unmodified source files
     ├── attendance_checker.py # Interactive attendance tracking application
     ├── assets.csv           # Master sample roster (10 students, 4 prior sessions)
@@ -124,6 +127,9 @@ The deployment workflow (`deploy_application`) systematically builds and verifie
 7. **Deployment Verification via Execution**:
    - Immediately invokes Feature 2 upon completing deployment. Successfully running the app confirms that directory paths, roster columns, permissions, and configuration operate seamlessly together.
 
+#### Feature 1 Terminal Run Verification
+![Feature 1 Deployment Execution](screenshots/feature1_deployment.png)
+
 ---
 
 ### Feature 2: Run the Application
@@ -150,6 +156,9 @@ The archival workflow (`archive_logs`):
   - Checks if `reports/absent.log` exists.
   - If present, copies it to `archives/absent/absent_${TIMESTAMP}.log`.
   - If absent (e.g. all students were present, so no absences were recorded), the script logs an informative message (`[i] reports/absent.log was not found (zero absences). Handled gracefully.`) and completes without error.
+
+#### Feature 3 Log Inspection & Archival Verification
+![Feature 3 Archival Execution](screenshots/feature3_archival.png)
 
 ---
 
